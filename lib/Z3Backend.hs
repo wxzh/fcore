@@ -42,33 +42,39 @@ explore = traverse defaultTarget
 counter = traverse counterTarget
 
 -- Collcet and declare all datatype definitions in the expression
-declareAllDatatypes :: Z3Env -> FI.Expr () ExecutionTree -> [Z3 (String, Sort)]
-declareAllDatatypes env = go
+declareAllDatatypes :: Z3Env -> FI.Expr () ExecutionTree -> Z3 Z3Env
+declareAllDatatypes = go
     where tree = Exp $ SBool True
           trees = repeat tree
       --  go (Data Rec databinds e1) = concatMap databinds ++ go e1
-          go (FI.Data S.NonRec [databind] e1) = declareDatatype env 0 databind : go e1
-          go (FI.If e1 e2 e3) = go e1 ++ go e2 ++ go e3
-          go (FI.PrimOp e1 _ e2) = go e1 ++ go e2
-          go (FI.Let _ e f) = go e ++ go (f tree)
-          go (FI.TApp e1 _) = go e1
-          go (FI.App e1 e2) = go e1 ++ go e2
-          go (FI.Constr _ es) = concatMap go es
-          go (FI.Case e1 alts) = go e1 ++ concatMap (\(FI.ConstrAlt _ _ f) -> go (f trees)) alts
-          go (FI.Lam _ _ e) = go (e tree)
-          go (FI.BLam _ e) = go (e ())
-          go (FI.Fix _ _ f _ _) = go (f tree tree)
-          go (FI.LetRec _ _ binds body) = concatMap go (binds trees) ++ go (body trees)
-          go _ = []
+          go env (FI.Data S.NonRec [databind] e1) =
+            do env' <- declareDatatype env 0 databind
+               go env' e1
+          go env (FI.If e1 e2 e3) = foldM go env [e1, e2, e3]
+          go env (FI.PrimOp e1 _ e2) = foldM go env [e1, e2]
+          go env (FI.Let _ e f) = foldM go env [e, f tree]
+          go env (FI.TApp e1 _) = go env e1
+          go env (FI.App e1 e2) = foldM go env [e1, e2]
+          go env (FI.Constr _ es) = foldM go env es
+          go env (FI.Case e1 alts) =
+            do env' <- go env e1
+               foldM (\acc (FI.ConstrAlt _ _ f) -> go acc (f trees)) env alts
+          go env (FI.Lam _ _ e) = go env (e tree)
+          go env (FI.BLam _ e) = go env (e ())
+          go env (FI.Fix _ _ f _ _) = go env (f tree tree)
+          go env (FI.LetRec _ _ binds body) =
+            do env' <- foldM go env (binds trees)
+               go env' (body trees)
+          go env _ = return env
 
 -- Declare a datatype, e.g. List: mkDatatype "List" [Nil, Cons]
-declareDatatype :: Z3Env -> Int -> FI.DataBind () -> Z3 (String, Sort)
+declareDatatype :: Z3Env -> Int -> FI.DataBind () -> Z3 Z3Env
 declareDatatype env recFlag (FI.DataBind name _ cs) =
     do sym <- mkStringSymbol name
        constrs <- mapM (declareConstructor env recFlag . transConstructor) (cs $ repeat ())
        sort <- mkDatatype sym constrs
        -- mapM_ delConstructor constrs
-       return (name, sort)
+       return env { adtSorts = Map.insert name sort (adtSorts env) }
 
 -- Declare a constructor, e.g. Cons: mkConstructor "Cons" "isCons" [("Cons_1", Just intSort, 0), ("Cons_2", Nothing, 0)]
 declareConstructor :: Z3Env -> Int -> SConstructor -> Z3 Constructor
@@ -112,14 +118,13 @@ traverse target stop e =
                       , funVars = IntMap.empty
                       , target = target i
                       }
-      name_sort_pairs <- sequence (declareAllDatatypes env e)
+      env' <- declareAllDatatypes env e
       constr_decls <- foldM (\acc sort ->
                                      do pairs <- getAdtConstrNameDeclPairs sort
                                         return $ Map.fromList pairs `Map.union` acc)
                        Map.empty
-                      (map snd name_sort_pairs)
-      let env' = env { adtSorts = Map.fromList name_sort_pairs, constrDecls = constr_decls }
-      pathsZ3 env' tree [] stop
+                      (Map.elems $ adtSorts env')
+      pathsZ3 env' { constrDecls = constr_decls } tree [] stop
 
 defaultTarget :: Int -> Doc -> SymValue -> Z3 ()
 defaultTarget _ cond e = liftIO $ putDoc $ cond <+> evalTo <+> pretty e <> linebreak
@@ -155,7 +160,9 @@ pathsZ3 env (Fork e (Left (l,r))) conds stop =
 
 pathsZ3 env (Fork e@(SConstr c vs) (Right ts)) conds stop =
     do let (cs, _, fs) = unzip3 ts
-           f = fromJust $ lookup (sconstrName c) (map sconstrName cs `zip` fs)
+           f = case lookup (sconstrName c) (map sconstrName cs `zip` fs) of
+                Just f -> f
+                _ -> error "pathsZ3: Fork SConstr"
        _ <- assertProjs env e
        pathsZ3 env (f $ map Exp vs) conds stop
 pathsZ3 env (Fork e (Right ts)) conds stop =
@@ -179,9 +186,11 @@ pathsZ3 env (Fork e (Right ts)) conds stop =
 type2sort :: Z3Env -> SymType -> Sort
 type2sort env TBool = boolSort env
 type2sort _ (TFun _ _) = error "type2sort: Function type"
-type2sort env (TData name) = fromJust $ Map.lookup name $ adtSorts env
--- type2sort env _ = tvarSort env
+type2sort env (TData name) = case Map.lookup name $ adtSorts env of
+                              Just s -> s
+                              _ -> error $ "type2sort:" ++ name ++ show (adtSorts env)
 type2sort env _ = intSort env
+-- type2sort env _ = tvarSort env
 -- type2sort env TInt = intSort env
 
 declareVar :: Z3Env -> Int -> SymType -> Z3 (Either AST FuncDecl)
