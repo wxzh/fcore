@@ -147,15 +147,16 @@ processCMD handle opt val_ctx env hist histOld index flagC flagH flagT flagS num
                   Just filename -> do expr <- liftIO (OptiUtils.src2fi filename)
                                       case getCMD (tail xs) of
                                         Just n -> liftIO $ explore (read n) expr
-                                        Nothing -> liftIO $ explore 20 expr
+                                        Nothing -> liftIO $ explore 10 expr
                   Nothing       -> outputStrLn "Invalid input"
                 loop handle opt val_ctx env hist histOld index flagC flagH flagT flagS num
           ":sc" -> do
                 case getCMD xs of
                   Just filename -> do expr <- liftIO (OptiUtils.src2fi filename)
+                                      time <- liftIO getCPUTime
                                       case getCMD (tail xs) of
-                                        Just n -> liftIO $ counter (read n) expr
-                                        Nothing -> liftIO $ counter 20 expr
+                                        Just n -> liftIO $ counter time (read n) expr
+                                        Nothing -> liftIO $ counter time 10 expr
                   Nothing       -> outputStrLn "Invalid input"
                 loop handle opt val_ctx env hist histOld index flagC flagH flagT flagS num
 #endif

@@ -23,6 +23,7 @@ import           Prelude                      hiding (EQ, GT, LT)
 import           PrettyUtils
 import qualified Src                          as S
 import           SymbolicEvaluator
+import           System.CPUTime
 import qualified SystemFI                     as FI
 import           Text.PrettyPrint.ANSI.Leijen
 import           Z3.Monad                     hiding (Z3Env)
@@ -38,9 +39,11 @@ data Z3Env = Z3Env { index             :: Int
                    , evidence          :: IntMap.IntMap (Either Bool (String, [(Int, SymType)]))
                    }
 
-explore, counter :: Int -> FI.Expr () ExecutionTree -> IO ()
+explore :: Int -> FI.Expr () ExecutionTree -> IO ()
 explore = traverse defaultTarget
-counter = traverse counterTarget
+
+counter :: Integer -> Int -> FI.Expr () ExecutionTree -> IO ()
+counter time = traverse (counterTarget time)
 
 -- Collcet and declare all datatype definitions in the expression
 declareAllDatatypes :: Z3Env -> FI.Expr () ExecutionTree -> Z3 Z3Env
@@ -133,12 +136,13 @@ traverse target stop e =
 defaultTarget :: Int -> Doc -> SymValue -> Z3 ()
 defaultTarget _ cond e = liftIO $ putDoc $ cond <+> evalTo <+> pretty e <> linebreak
 
-counterTarget :: Int -> Doc -> SymValue -> Z3 ()
-counterTarget i cond (SBool False) =
-    do liftIO $ putDoc $ cond <+> evalTo <+> text "False" <> linebreak
+counterTarget :: Integer -> Int -> Doc -> SymValue -> Z3 ()
+counterTarget startTime i cond (SBool False) =
+    do liftIO $ getCPUTime >>= (\time -> putDoc $ (text . show $ (time - startTime) `div` (10^9)) <> text "ms" <> linebreak)
+       liftIO $ putDoc $ cond <+> evalTo <+> text "False" <> linebreak
        withModel ((>>= (liftIO . putStrLn . counterExample i)) . showModel)
        return ()
-counterTarget _ _ _ = return ()
+counterTarget _ _ _ _ = return ()
 
 pathsZ3 :: Z3Env -> ExecutionTree -> [Doc] -> Int -> Z3 (Int, Int, Int)
 pathsZ3 _ _ _ stop | stop <= 0 = return (0, 0, 0)
@@ -188,7 +192,7 @@ pathsZ3 env (Fork e (Right ts)) conds stop =
     selectPattern n = fromJust $ lookup n (map sconstrName cs `zip` fs)
     go i stop =
       do ast <- assertProjs env e
-         triples <- mapAndUnzip3M (local . assertConstructor ast) ts
+         triples <- mapM (local . assertConstructor ast) ts
          return $ foldr (\(q, f, i) (x, y, z) -> (q+x, f+y, i+z)) (0, 0, 0) triples
 
       where assertConstructor :: AST -> (SConstructor, [S.Name], [ExecutionTree] -> ExecutionTree) -> Z3 (Int, Int, Int)
