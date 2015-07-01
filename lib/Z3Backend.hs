@@ -13,6 +13,7 @@ Symbolic evaluator will generates all possible execution paths for a given progr
 
 module Z3Backend where
 
+import Debug.Trace
 import           Control.Monad
 import           Control.Monad.IO.Class       (liftIO)
 import qualified Data.IntMap                  as IntMap
@@ -115,7 +116,8 @@ traverse target stop e =
 
       let (tree, i) = exec $ seval e -- i is the # of symbolic values
       let env = Z3Env { index = i
-                      , intSort = int, boolSort = bool--, tvarSort = tvar
+                      , intSort = int
+                      , boolSort = bool
                       , adtSorts = Map.empty
                       , constrDecls = Map.empty
                       , symVars = IntMap.empty
@@ -161,23 +163,26 @@ pathsZ3 env (NewSymVar i typ t) conds stop =
                   ast
        pathsZ3 env' t conds stop
 
-pathsZ3 env (Fork e (Left (l,r))) conds stop =
+pathsZ3 env (Fork TBool e ts) conds stop =
   case e of
-   SBool True -> pathsZ3 env l conds stop
-   SBool False -> pathsZ3 env r conds stop
-   SVar _ i _ -> case IntMap.lookup i evidence' of
-                  Just (Left b) -> if b then pathsZ3 env l conds stop else pathsZ3 env r conds stop
-                  _ -> go i stop
+   SBool b -> pathsZ3 env (selectPattern b) conds stop
+   SVar _ i _ ->
+     case IntMap.lookup i evi of
+      Just (Left b) -> pathsZ3 env (selectPattern b) conds stop
+      _ -> go i stop
    _ -> go (-1) $ stop-1
   where
-    evidence' = evidence env
+    evi = evidence env
+    cfs = map (\(c,_,f) -> (toBool c, f [])) ts
+    selectPattern b = fromJust $ lookup b cfs
     go i stop =
       do ast <- assertProjs env e
-         (q1, f1, i1) <- local $ assert ast >> whenSat (pathsZ3 (if i >= 0 then env {evidence = IntMap.insert i (Left True) evidence'} else env) l (pretty e : conds) stop)
-         (q2, f2, i2) <- local $ mkNot ast >>= assert >> whenSat (pathsZ3 (if i >= 0 then env {evidence = IntMap.insert i (Left False) evidence'} else env) r (prependNot (pretty e) : conds) stop)
-         return (q1+q2, f1+f2, i1+i2)
+         let assertBool (True, f) = local $ assert ast >> whenSat (pathsZ3 (if i >= 0 then env {evidence = IntMap.insert i (Left True) evi} else env) f (pretty e : conds) stop)
+             assertBool (False, f) = local $ mkNot ast >>= assert >> whenSat (pathsZ3 (if i >= 0 then env {evidence = IntMap.insert i (Left False) evi} else env) f (prependNot (pretty e) : conds) stop)
+         triples <- mapM assertBool cfs
+         return $ sumTriples triples
 
-pathsZ3 env (Fork e (Right ts)) conds stop =
+pathsZ3 env (Fork t e ts) conds stop =
   case e of
    SConstr c vs ->
      pathsZ3 env (selectPattern (sconstrName c) $ map Exp vs) conds stop
@@ -186,14 +191,13 @@ pathsZ3 env (Fork e (Right ts)) conds stop =
       Just (Right (n, its)) -> pathsZ3 env (selectPattern n $ map (\(i,t) -> Exp $ SVar "x" i t) its) conds stop
       _ -> go i $ stop-1
    _ -> go (-1) (stop-1)
-
   where
-    (cs, _, fs) = unzip3 ts
-    selectPattern n = fromJust $ lookup n (map sconstrName cs `zip` fs)
+    nfs = map (\(c,_,f) -> (sconstrName c, f)) ts
+    selectPattern n = fromJust $ lookup n nfs
     go i stop =
       do ast <- assertProjs env e
          triples <- mapM (local . assertConstructor ast) ts
-         return $ foldr (\(q, f, i) (x, y, z) -> (q+x, f+y, i+z)) (0, 0, 0) triples
+         return $ sumTriples triples
 
       where assertConstructor :: AST -> (SConstructor, [S.Name], [ExecutionTree] -> ExecutionTree) -> Z3 (Int, Int, Int)
             assertConstructor ast (SConstructor name types _, vars, f) =
@@ -216,9 +220,8 @@ type2sort _ (TFun _ _) = error "type2sort: Function type"
 type2sort env (TData name) = case Map.lookup name $ adtSorts env of
                               Just s -> s
                               _ -> error $ "type2sort:" ++ name ++ show (adtSorts env)
-type2sort env _ = intSort env
+type2sort env _ = intSort env -- both TAny will be instantiated as Int
 -- type2sort env _ = tvarSort env
--- type2sort env TInt = intSort env
 
 declareVar :: Z3Env -> Int -> SymType -> Z3 (Either AST FuncDecl)
 declareVar env i (TFun tArgs tRes) =
@@ -258,7 +261,7 @@ assertProjs Z3Env {intSort = int, symVars = vars, funVars = funs, constrDecls = 
                    ADD -> mkAdd [x1, x2]
                    SUB -> mkSub [x1, x2]
                    MUL -> mkMul [x1, x2]
-                   OR -> mkOr [x1, x2]
+                   OR -> trace "called" $ mkOr [x1, x2]
                    AND -> mkAnd [x1, x2]
                    DIV -> mkDiv x1 x2
                    LT -> mkLt x1 x2
@@ -291,3 +294,10 @@ res2bool :: Result -> Bool
 res2bool Sat = True
 res2bool Unsat = False
 res2bool Undef = error "res2bool: Undef"
+
+toBool :: SConstructor -> Bool
+toBool (SConstructor "True" [] TBool) = True
+toBool (SConstructor "False" [] TBool) = False
+toBool (SConstructor n ts t) = error $ "toBool " ++ n ++ (concatMap show ts) ++ show t
+
+sumTriples = foldr (\(q,f,i) (qacc,facc,iacc) -> (qacc+q,facc+f,iacc+i)) (0,0,0)

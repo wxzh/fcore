@@ -58,7 +58,6 @@ tokens :-
     <str> (@charEscape | $printable # [\" \\] | \\\{) { save_string }
     <strexp> \}     { end_strexp `andBegin` str }
     <str> \"        { end_string `andBegin` 0 }
-    
     <0> \}          { locate (\_ _ -> Tccurly) }
     <0, strexp>     {
 
@@ -88,7 +87,6 @@ tokens :-
     and         { locate (\_ _ -> Tand) }
     Int         { locate (\_ _ -> Tjavaclass "java.lang.Integer") }
     String      { locate (\_ _ -> Tjavaclass "java.lang.String") }
-    Bool        { locate (\_ _ -> Tjavaclass "java.lang.Boolean") }
     Char        { locate (\_ _ -> Tjavaclass "java.lang.Character") }
     Float       { locate (\_ _ -> Tjavaclass "java.lang.Float") }
     Double      { locate (\_ _ -> Tjavaclass "java.lang.Double") }
@@ -111,8 +109,6 @@ tokens :-
     -- Literals
     $digit+                { locate (\_ s -> Tint (read s)) }
     \'(@charEscape | $printable # [\' \\])\'  { convChar False }
-    True                   { locate (\_ s -> Tbool True) }
-    False                  { locate (\_ s -> Tbool False) }
     Empty                  { locate (\_ _ -> Temptytree) }
     Fork                   { locate (\_ _ -> Tnonemptytree ) }
     head                   { locate (\_ _ -> Tlisthead) }
@@ -160,7 +156,7 @@ data Token = Toparen | Tcparen | Tocurly | Tccurly
            | Tif | Tthen | Telse
            | Tcomma | Tsemi
            | Tupperid String | Tlowerid String | Tunderid Int | Tsymbolid String
-           | Tint Integer | Tbool Bool | Tchar Char | Tunitlit | Tunit
+           | Tint Integer | Tchar Char | Tunitlit | Tunit
            | Tprimop J.Op
            | Tobrack | Tcbrack | Tdcolon
            | Tmodule | Timport
@@ -189,7 +185,7 @@ showPosn (AlexPn _ line col) = show line ++ ':': show col
 lexError :: String -> Alex a
 lexError s = do
   (p,c,_,input) <- alexGetInput
-  alexError (showPosn p ++ ": " ++ s ++ 
+  alexError (showPosn p ++ ": " ++ s ++
                    (if (not (null input))
                      then " before " ++ show (head input)
                      else " at end of file"))

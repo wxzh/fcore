@@ -82,7 +82,6 @@ import JavaUtils
 
   INT      { L _ (Tint _) }
   SCHAR    { L _ (Tschar _) }
-  BOOL     { L _ (Tbool _) }
   CHAR     { L _ (Tchar _) }
   "Empty"    { L _ Temptytree }
   "Fork"     { L _ Tnonemptytree }
@@ -363,7 +362,6 @@ interps :: { ReaderExpr }
 lit :: { ReaderExpr }
     : INT                       { Lit (Int $ toInt $1)       `withLoc` $1 }
     | STRL interps STRR         { unLoc $2                   `withLoc` $1 }
-    | BOOL                      { Lit (Bool $ toBool $1)     `withLoc` $1 }
     | CHAR                      { Lit (Char $ toChar $1)     `withLoc` $1 }
     | "()"                      { Lit UnitLit                `withLoc` $1 }
 
@@ -486,7 +484,6 @@ reader src = case (runAlex (injectPredef src) parseExpr) of
 
 -- Helper functions to extract located token value
 toInt (L _ (Tint x)) = x
-toBool (L _ (Tbool x)) = x
 toChar (L _ (Tchar x)) = x
 toSChar (L _ (Tschar x)) = x
 toString (L _ tok) =

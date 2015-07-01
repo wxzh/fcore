@@ -376,20 +376,19 @@ checkExpr (L loc (PrimOp e1 op e2)) =
     Compare _ ->
       do (t1, e1') <- checkExpr e1
          (_ , e2') <- inferAgainst e2 t1
-         return (JType (JClass "java.lang.Boolean"), L loc $ PrimOp e1' op e2')
+         return (dtBool, L loc $ PrimOp e1' op e2')
     Logic _ ->
-      do (_, e1') <- inferAgainst e1 (JType (JClass "java.lang.Boolean"))
-         (_, e2') <- inferAgainst e2 (JType (JClass "java.lang.Boolean"))
-         return (JType (JClass "java.lang.Boolean"), L loc $ PrimOp e1' op e2')
+      do (_, e1') <- inferAgainst e1 dtBool
+         (_, e2') <- inferAgainst e2 dtBool
+         return (dtBool, L loc $ PrimOp e1' op e2')
 
+-- Desugar If to Case
 checkExpr (L loc (If e1 e2 e3))
-  = do (_, e1')  <- inferAgainst e1 (JType (JClass "java.lang.Boolean"))
-       (t2, e2') <- checkExpr e2
-       (t3, e3') <- checkExpr e3
-       d <- getTypeContext
-       return (fromMaybe (panic message) (leastUpperBound d t2 t3), L loc $ If e1' e2' e3')
-  where
-    message = "infer: least upper bound of types of two branches does not exist"
+  = do inferAgainst e1 dtBool
+       checkExpr (L loc (Case e1 [(ConstrAlt $ Constructor "True" []) [] e2, (ConstrAlt $ Constructor "False" []) [] e3]))
+       -- return (fromMaybe (panic message) (leastUpperBound d t2 t3), L loc $ If e1' e2' e3')
+  -- where
+    -- message = "infer: least upper bound of types of two branches does not exist"
 
 checkExpr (L loc (Let rec_flag binds e)) =
   do checkDupNames (map bindId binds)
@@ -858,7 +857,7 @@ unwrapJCallee (Static    c) = (True, c)
 srcLitType :: Lit -> Type
 srcLitType (Int _)    = JType (JClass "java.lang.Integer")
 srcLitType (String _) = JType (JClass "java.lang.String")
-srcLitType (Bool _)   = JType (JClass "java.lang.Boolean")
+-- srcLitType (Bool _)   = JType (JClass "java.lang.Boolean")
 srcLitType (Char _)   = JType (JClass "java.lang.Character")
 srcLitType UnitLit    = Unit
 
@@ -892,3 +891,5 @@ noExpr err = noLoc (err, Nothing)
 
 withExpr :: TypeError -> ReaderExpr -> LTypeErrorExpr
 withExpr err expr = (err, Just expr) `withLoc` expr
+
+dtBool = Datatype "Bool" [] ["True", "False"]

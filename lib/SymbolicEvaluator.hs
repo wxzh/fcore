@@ -92,10 +92,11 @@ eval (Case e alts) =
 eval e = panic $ show e ++ " Can not be evaled"
 
 data SConstructor = SConstructor {sconstrName :: S.ReaderId, sconstrParams :: [SymType], sconstrDatatype :: SymType}
+                  deriving Eq
 
 data ExecutionTree = Exp SymValue
                    -- | Fork ExecutionTree SymValue ExecutionTree
-                   | Fork SymValue (Either (ExecutionTree, ExecutionTree) [(SConstructor, [S.ReaderId], [ExecutionTree] -> ExecutionTree)])
+                   | Fork SymType SymValue [(SConstructor, [S.ReaderId], [ExecutionTree] -> ExecutionTree)]
                    | NewSymVar Int SymType ExecutionTree
 
 data SymType = TInt
@@ -103,7 +104,7 @@ data SymType = TInt
              | TFun [SymType] SymType
              | TData S.ReaderId
              | TAny S.ReaderId
-               deriving Eq
+               deriving (Show, Eq)
 
 data SymValue = SVar S.ReaderId Int SymType -- free variables
               | SInt Integer
@@ -140,14 +141,14 @@ seval (Var _ x) = x
 seval (Lit x) =
     case x of
       S.Int n -> Exp $ SInt n
-      S.Bool b -> Exp $ SBool b
+      -- S.Bool b -> Exp $ SBool b
 
-seval (If e1 e2 e3) =
-    case e1' of
-        Exp (SBool True) -> seval e2
-        Exp (SBool False) -> seval e3
-        _ -> propagate e1' (Left (seval e2, seval e3))
-    where e1' = seval e1
+-- seval (If e1 e2 e3) =
+--     case e1' of
+--         Exp (SBool True) -> seval e2
+--         Exp (SBool False) -> seval e3
+--         _ -> propagate e1' [(SConstructor "True" [] (TData "Bool"), [], \_ -> seval e2), (SConstructor "False" [] (TData "Bool"), [], \_ -> seval e3)]
+--     where e1' = seval e1
 
 seval (PrimOp e1 op e2) =
     case op of
@@ -180,39 +181,44 @@ seval (TApp e _) = seval e
 seval g@(Fix _ n f t _) = Exp $ SFun n (seval . f (seval g)) (transType t)
 seval (LetRec _ _ binds body) = seval . body . fix $ map seval . binds
 seval (Data _ _ e) = seval e
-seval (Constr c es) = mergeList (SConstr $ transConstructor c) (map seval es)
-seval (Case e alts) = propagate (seval e) (Right (map (\(ConstrAlt c ns f) -> (transConstructor c, ns, seval . f)) alts))
+seval (Constr c es) =
+  case c of
+   Constructor "True" _ -> Exp $ SBool True
+   Constructor "False" _ -> Exp $ SBool False
+   _ -> mergeList (SConstr $ transConstructor c) (map seval es)
+seval (Case e alts) = propagate (transType $ last ts) (seval e) (map (\(ConstrAlt c ns f) -> (transConstructor c, ns, seval . f)) alts)
+  where ConstrAlt (Constructor _ ts) _ _ = head alts
 seval e = panic $ "seval: " ++ show e
 
 transConstructor :: Constructor () -> SConstructor
 transConstructor (Constructor n ts) = SConstructor n (init ts') (last ts')
     where ts' = map transType ts
 
-propagate :: ExecutionTree ->
-             Either (ExecutionTree, ExecutionTree) [(SConstructor, [S.ReaderId], [ExecutionTree] -> ExecutionTree)] ->
+propagate :: SymType ->
+             ExecutionTree ->
+             [(SConstructor, [S.ReaderId], [ExecutionTree] -> ExecutionTree)] ->
              ExecutionTree
-propagate (Exp e) ts = Fork e ts
-propagate (Fork e (Left (l,r))) ts' = Fork e (Left (propagate l ts', propagate r ts'))
-propagate (Fork e (Right ts)) ts' = Fork e (Right [(c, ns, \es -> propagate (f es) ts')| (c,ns,f) <- ts])
-propagate (NewSymVar i typ t) ts = NewSymVar i typ (propagate t ts)
+propagate dt (Exp e) ts = Fork dt e ts
+propagate dt' (Fork dt e ts) ts' = Fork dt e [(c, ns, \es -> propagate dt' (f es) ts')| (c,ns,f) <- ts]
+propagate dt (NewSymVar i typ t) ts = NewSymVar i typ (propagate dt t ts)
 
 transType :: Type () -> SymType
 transType (JClass t) = jname2symtype t
 transType (Fun t1 t2) = TFun [transType t1] (transType t2)
+transType (Datatype "Bool" _ _) = TBool
 transType (Datatype n _ _) = TData n
 transType (TVar n _) = TAny n
 transType t = panic $ "transType: " ++ show t
 
 jname2symtype :: String -> SymType
 jname2symtype "java.lang.Integer" = TInt
-jname2symtype "java.lang.Boolean" = TBool
+-- jname2symtype "java.lang.Boolean" = TBool
 jname2symtype s = panic $ "str2stype: unsupported java type " ++ s
 
 mergeList :: ([SymValue] -> SymValue) -> [ExecutionTree] -> ExecutionTree
 mergeList f [] = Exp (f [])
 mergeList f (Exp e : xs) = mergeList (\es -> f (e:es)) xs
-mergeList f (Fork e (Left (l, r)) : xs) = Fork e $ Left (mergeList f (l:xs), mergeList f (r:xs))
-mergeList f (Fork e (Right ts) : xs) = Fork e $ Right [(c, ns, \es -> mergeList f (g es : xs)) | (c,ns,g) <- ts]
+mergeList f (Fork dt e ts : xs) = Fork dt e [(c, ns, \es -> mergeList f (g es : xs)) | (c,ns,g) <- ts]
 mergeList f (NewSymVar i typ tree : xs) = NewSymVar i typ (mergeList f (tree:xs))
 
 merge :: (SymValue -> SymValue -> SymValue, Op)
@@ -261,10 +267,8 @@ merge (_, AND) (Exp (SBool True)) e = e
 merge (_, AND) e (Exp (SBool True)) = e
 
 merge (f, _) (Exp e1) (Exp e2) = Exp (f e1 e2)
-merge f (Fork e (Left (l,r))) t = Fork e $ Left (merge f l t, merge f r t)
-merge f t (Fork e (Left (l,r))) = Fork e $ Left (merge f t l, merge f t r)
-merge f (Fork e (Right ts)) t = Fork e $ Right [(c, ns, \es -> merge f (g es) t) | (c,ns,g) <- ts]
-merge f t (Fork e (Right ts)) = Fork e $ Right [(c, ns, merge f t . g) | (c,ns,g) <- ts]
+merge f (Fork dt e ts) t = Fork dt e [(c, ns, \es -> merge f (g es) t) | (c,ns,g) <- ts]
+merge f t (Fork dt e ts) = Fork dt e [(c, ns, merge f t . g) | (c,ns,g) <- ts]
 merge f (NewSymVar i t t1) t2 = NewSymVar i t (merge f t1 t2)
 merge f t1 (NewSymVar i typ t2) = NewSymVar i typ (merge f t1 t2)
 
@@ -274,14 +278,12 @@ treeApply (Exp e) t =
     case e of
       SVar n i typ -> apply (SApp (SVar n i typ)) t
       SFun _ f _ -> f t
-treeApply (Fork e (Left (l,r))) t = Fork e $ Left (treeApply l t, treeApply r t)
-treeApply (Fork e (Right ts)) t = Fork e $ Right [(c, ns, \es -> treeApply (f es) t) | (c,ns,f) <- ts]
+treeApply (Fork dt e ts) t = Fork dt e [(c, ns, \es -> treeApply (f es) t) | (c,ns,f) <- ts]
 treeApply (NewSymVar i typ t1) t2 = NewSymVar i typ (treeApply t1 t2)
 
 apply :: (SymValue -> SymValue) -> ExecutionTree -> ExecutionTree
 apply f (Exp e) = Exp (f e)
-apply f (Fork e (Left (l,r))) = Fork e $ Left (apply f l, apply f r)
-apply f (Fork e (Right ts)) = Fork e $ Right [(c, ns, apply f . g)| (c,ns,g) <- ts]
+apply f (Fork dt e ts) = Fork dt e [(c, ns, apply f . g)| (c,ns,g) <- ts]
 apply f (NewSymVar i typ t) = NewSymVar i typ (apply f t)
 
 instance Pretty Value where
@@ -315,6 +317,7 @@ instance Pretty SymValue where
     pretty (SApp e1 e2) = pretty e1 <+> pretty e2
     pretty (SOp op e1 e2) = parens $ pretty e1 <+> pretty op <+> pretty e2
     pretty (SFun{}) = text "<<fun>>"
+    pretty (SConstr c []) = text (sconstrName c)
     pretty (SConstr c es) = parens $ hsep $ text (sconstrName c) : map pretty es
 
 instance Pretty ExecutionTree where
@@ -323,12 +326,7 @@ instance Pretty ExecutionTree where
 prettyTree :: ExecutionTree -> Doc -> Int -> (Doc, Int)
 prettyTree _ _ 0 = (empty, 0)
 prettyTree (Exp e) s stop = (s <+> evalTo <+> pretty e <> linebreak, stop - 1)
-prettyTree (Fork e (Left (l,r))) s stop =
-    let s1 = pretty e
-        (s2, stop2) = prettyTree l (s <+> text "&&" <+> s1) stop
-        (s3, stop3) = prettyTree r (s <+> text "&&" <+> prependNot s1) stop2
-    in (s2 <> s3, stop3)
-prettyTree (Fork e (Right ts)) s stop =
+prettyTree (Fork _ e ts) s stop =
     foldl (\(sacc, i) (c,ns,f) ->
                let (snew, i') = prettyTree (f $ supply ns [1..]) (s <+> text "&&" <+> pretty e <+> equals <+> hsep (map text $ sconstrName c : ns)) i
                in (sacc <> snew, i'))
