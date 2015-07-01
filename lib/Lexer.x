@@ -105,6 +105,7 @@ tokens :-
     of          { locate (\_ _ -> Tof) }
     \_          { locate (\_ _ -> Tunderscore) }
     \`          { locate (\_ _ -> Tbackquote) }
+    \=\=\>      { locate (\_ _ -> Tpremise) }
 
     -- Literals
     $digit+                { locate (\_ s -> Tint (read s)) }
@@ -164,6 +165,7 @@ data Token = Toparen | Tcparen | Tocurly | Tccurly
            | Tlist | Tlisthead | Tlisttail | Tlistcons | Tlistisnil | Tlistlength
            | Tdata | Tcase | Tbar | Tof | Tto | Tunderscore
            | Teof | Tschar Char | Tstrl | Tstrr | Tstrexpl | Tstrexpr
+           | Tpremise
            deriving (Eq, Show)
 
 -- Modify a normal rule inside { ... } so that it returns a *located* token.

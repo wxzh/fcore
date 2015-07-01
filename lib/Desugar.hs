@@ -156,6 +156,7 @@ Conclusion: this rewriting cannot allow type variables in the RHS of the binding
 
     go (L _ (Constr c es)) = F.Constr (desugarConstructor d c) (map go es)
     go (L _ (Case e alts)) = F.Case (go e) (map desugarAlts alts)
+    go (L _ (Premise e1 e2)) = F.Premise (go e1) (go e2)
     go (L _ (CaseString e alts)) =
             let emptytest = noLoc $ JMethod (NonStatic e) "isEmpty" [] "java.lang.Boolean"
                 [emptyexpr]        = [ expr | ConstrAlt (Constructor "empty" _) _ expr <-  alts]

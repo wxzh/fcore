@@ -150,6 +150,7 @@ data Expr id ty
   | ConstrTemp Name
   | Constr Constructor [LExpr id ty] -- post typecheck only
   | JProxyCall (LExpr id ty) ty
+  | Premise (LExpr id ty) (LExpr id ty)
   deriving (Eq, Show)
 
 data DataBind = DataBind Name [Name] [Constructor] deriving (Eq, Show)
@@ -464,7 +465,9 @@ instance (Show id, Pretty id, Show ty, Pretty ty) => Pretty (Expr id ty) where
 
   pretty (Case e alts) = hang 2 (text "case" <+> pretty e <+> text "of" <$> text " " <+> intersperseBar (map pretty alts))
   pretty (CaseString e alts) = hang 2 (text "case" <+> pretty e <+> text "of" <$> text " " <+> intersperseBar (map pretty alts))
+  pretty (Constr c []) = text (constrName c)
   pretty (Constr c es) = parens $ hsep $ text (constrName c) : map pretty es
+  pretty (Premise e1 e2) = pretty e1 <+> text "==>" <+> pretty e2
   pretty e = text (show e)
 
 instance (Show id, Pretty id, Show ty, Pretty ty) => Pretty (Bind id ty) where

@@ -165,21 +165,25 @@ pathsZ3 env (NewSymVar i typ t) conds stop =
 
 pathsZ3 env (Fork TBool e ts) conds stop =
   case e of
-   SBool b -> pathsZ3 env (selectPattern b) conds stop
+   SBool b -> case selectPattern b of
+                   Just t -> pathsZ3 env t conds stop
+                   _ -> return (0,0,0)
    SVar _ i _ ->
      case IntMap.lookup i evi of
-      Just (Left b) -> pathsZ3 env (selectPattern b) conds stop
+      Just (Left b) -> case selectPattern b of
+                        Just t -> pathsZ3 env t conds stop
+                        _ -> error "selectPattern SVar"
       _ -> go i stop
    _ -> go (-1) $ stop-1
   where
     evi = evidence env
-    cfs = map (\(c,_,f) -> (toBool c, f [])) ts
-    selectPattern b = fromJust $ lookup b cfs
+    cts = map (\(c,_,f) -> (toBool c, f [])) ts
+    selectPattern b = lookup b cts
     go i stop =
       do ast <- assertProjs env e
          let assertBool (True, f) = local $ assert ast >> whenSat (pathsZ3 (if i >= 0 then env {evidence = IntMap.insert i (Left True) evi} else env) f (pretty e : conds) stop)
              assertBool (False, f) = local $ mkNot ast >>= assert >> whenSat (pathsZ3 (if i >= 0 then env {evidence = IntMap.insert i (Left False) evi} else env) f (prependNot (pretty e) : conds) stop)
-         triples <- mapM assertBool cfs
+         triples <- mapM assertBool cts
          return $ sumTriples triples
 
 pathsZ3 env (Fork t e ts) conds stop =
@@ -193,7 +197,9 @@ pathsZ3 env (Fork t e ts) conds stop =
    _ -> go (-1) (stop-1)
   where
     nfs = map (\(c,_,f) -> (sconstrName c, f)) ts
-    selectPattern n = fromJust $ lookup n nfs
+    selectPattern n = case lookup n nfs of
+                       Just f -> f
+                       _ -> error "selectPattern n"
     go i stop =
       do ast <- assertProjs env e
          triples <- mapM (local . assertConstructor ast) ts
@@ -261,7 +267,7 @@ assertProjs Z3Env {intSort = int, symVars = vars, funVars = funs, constrDecls = 
                    ADD -> mkAdd [x1, x2]
                    SUB -> mkSub [x1, x2]
                    MUL -> mkMul [x1, x2]
-                   OR -> trace "called" $ mkOr [x1, x2]
+                   OR -> mkOr [x1, x2]
                    AND -> mkAnd [x1, x2]
                    DIV -> mkDiv x1 x2
                    LT -> mkLt x1 x2

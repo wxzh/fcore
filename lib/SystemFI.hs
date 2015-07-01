@@ -111,6 +111,8 @@ data Expr t e
   | Constr (Constructor t) [Expr t e]
   | Case (Expr t e) [Alt t e]
 
+  | Premise (Expr t e) (Expr t e)
+
 newtype FExp = HideF { revealF :: forall t e. Expr t e }
 
 data Alt t e = ConstrAlt (Constructor t) [Src.ReaderId] ([e] -> Expr t e)

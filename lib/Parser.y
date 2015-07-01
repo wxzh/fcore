@@ -65,6 +65,7 @@ import JavaUtils
   "of"     { L _ Tof }
   "_"      { L _ Tunderscore }
   "`"      { L _ Tbackquote }
+  "==>"    { L _ Tpremise}
   STRL     { L _ Tstrl }
   STRR     { L _ Tstrr }
   STREXPL  { L _ Tstrexpl }
@@ -289,6 +290,7 @@ infixexpr :: { ReaderExpr }
     | infixexpr "&&" infixexpr  { PrimOp $1 (Logic J.CAnd)   $3 `withLoc` $1 }
     | infixexpr "||" infixexpr  { PrimOp $1 (Logic J.COr)    $3 `withLoc` $1 }
     | infixexpr ",," infixexpr  { Merge $1 $3 `withLoc` $1 }
+    | infixexpr "==>" infixexpr { Premise $1 $3 `withLoc` $1 }
     | fexpr                     { $1 }
 
 fexpr :: { ReaderExpr }

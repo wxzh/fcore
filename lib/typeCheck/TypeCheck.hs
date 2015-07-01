@@ -390,6 +390,12 @@ checkExpr (L loc (If e1 e2 e3))
   -- where
     -- message = "infer: least upper bound of types of two branches does not exist"
 
+-- Desugar Premise to Case with only True pattern
+checkExpr (L loc (Premise e1 e2))
+  = do (_, e1') <- inferAgainst e1 dtBool
+       (t, e2') <- checkExpr e2
+       return (t, L loc $ Case e1' [(ConstrAlt $ Constructor "True" [dtBool]) [] e2'])
+
 checkExpr (L loc (Let rec_flag binds e)) =
   do checkDupNames (map bindId binds)
      binds' <- case rec_flag of
@@ -892,4 +898,5 @@ noExpr err = noLoc (err, Nothing)
 withExpr :: TypeError -> ReaderExpr -> LTypeErrorExpr
 withExpr err expr = (err, Just expr) `withLoc` expr
 
+dtBool :: Type
 dtBool = Datatype "Bool" [] ["True", "False"]
