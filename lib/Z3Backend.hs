@@ -38,7 +38,8 @@ data Z3Env = Z3Env { index             :: Int
                    , funVars           :: IntMap.IntMap FuncDecl
                    , target            :: Doc -> SymValue -> Z3 ()
                    , cachedVars        :: IntMap.IntMap (String, [(Int, SymType)])
-                   , asserts           :: [Doc]
+                   , conds             :: [Doc]
+                   , simplifiedAsserts :: [String]
                    }
 
 explore :: Int -> FI.Expr () ExecutionTree -> IO ()
@@ -125,7 +126,8 @@ traverse target stop e =
                       , funVars = IntMap.empty
                       , target = target i
                       , cachedVars = IntMap.empty
-                      , asserts = []
+                      , conds = []
+                      , simplifiedAsserts = []
                       }
       env' <- declareAllDatatypes env e
       constr_decls <- foldM (\acc sort ->
@@ -151,10 +153,10 @@ counterTarget _ _ _ _ = return ()
 pathsZ3 :: Z3Env -> ExecutionTree -> Int -> Z3 (Int, Int, Int)
 pathsZ3 _ _ stop | stop <= 0 = return (0, 0, 0)
 pathsZ3 env (Exp e) _ =
-    do target env (foldr1 combineWithAnd conds) e
+    do target env (foldr1 combineWithAnd xs') e
        return (0, 1, 0)
-    where xs = reverse $ asserts env
-          conds = if null xs then [text "True"] else xs
+    where xs = reverse $ conds env
+          xs' = if null xs then [text "True"] else xs
 
 pathsZ3 env (NewSymVar i typ t) stop =
     do ast <- declareVar env i typ
@@ -166,24 +168,28 @@ pathsZ3 env (NewSymVar i typ t) stop =
 
 pathsZ3 env (Fork TBool e ts) stop =
   do ast <- assertProjs env e
-     s <- simplified2Bool ast
-     case s of
-      -- e.g., if True
-      Just b -> case selectPattern b of
-                 Just t -> pathsZ3 env t stop
-                 _ -> return (0,0,0)
-      _ -> do let i = case e of {SVar _ i _ -> i; _ -> -1}
-              triples <- mapM (assertBool i) cts
-              return $ sumTriples triples
-                where cond = pretty e
-                      conds = asserts env
-                      assertBool i (True, f) =
-                        local $ assert ast >> whenSat (pathsZ3 env {asserts = cond : conds, cachedVars = IntMap.insert i ("True", []) (cachedVars env)} f (stop-1))
-                      assertBool i (False, f) =
-                        local $ mkNot ast >>= assert >> whenSat (pathsZ3 env {asserts = (prependNot cond : conds), cachedVars = IntMap.insert i ("False", []) (cachedVars env)} f (stop-1))
-  where
-    cts = map (\(c,_,f) -> (toBool c, f [])) ts
-    selectPattern b = lookup b cts
+     true <- simplify ast
+     false <- simplify =<< mkNot ast
+     truePathCond <- astToString true
+     falsePathCond <- astToString false
+     let selectPattern b = lookup b cts
+         cts = map (\(c,_,f) -> (toBool c, f [])) ts
+         cond = pretty e
+         asserts = simplifiedAsserts env
+     if (truePathCond == "true") || (truePathCond `elem` asserts)
+     then case selectPattern True of
+           -- e.g., if True
+            Just t -> pathsZ3 env t stop
+            _ -> return (0, 0, 0)
+     else if (falsePathCond == "true") || (falsePathCond `elem` asserts)
+          then case selectPattern False of
+                Just t -> pathsZ3 env t stop
+                _ -> return (0, 0, 0)
+     else do let i = case e of {SVar _ i _ -> i; _ -> -1}
+                 assertBool i (True, f) = local $ assert true >> whenSat (pathsZ3 env {conds = cond : conds env, cachedVars = IntMap.insert i ("True", []) (cachedVars env), simplifiedAsserts = truePathCond : asserts} f (stop-1))
+                 assertBool i (False, f) = local $ assert false >> whenSat (pathsZ3 env {conds = (prependNot cond : conds env), cachedVars = IntMap.insert i ("False", []) (cachedVars env), simplifiedAsserts = falsePathCond : asserts} f (stop-1))
+             triples <- mapM (assertBool i) cts
+             return $ sumTriples triples
 
 pathsZ3 env (Fork t e ts) stop =
   case e of
@@ -218,10 +224,10 @@ pathsZ3 env (Fork t e ts) stop =
                         cond = pretty e <+> equals <+> hsep (map text $ name : map (("x"++) . show) var_ids)
                         env' = env { index = next_index
                                    , symVars = IntMap.fromList var_id_ast_pairs `IntMap.union` symVars env
-                                   , asserts = cond : (asserts env)}
+                                   , conds = cond : (conds env)}
                         env'' = if i >= 0 then env' {cachedVars = IntMap.insert i (name, zip var_ids types) (cachedVars env') } else env'
                     assert =<< mkEq ast =<< mkApp constr_decl var_asts
-                    whenSat $ pathsZ3 env'' (f $ supply (repeat "x") var_ids) stop
+                    whenSat $ pathsZ3 env'' (f $ supply (repeat "x") var_ids) (stop-1)
 
 type2sort :: Z3Env -> SymType -> Sort
 type2sort env TBool = boolSort env
