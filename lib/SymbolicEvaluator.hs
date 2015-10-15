@@ -142,37 +142,7 @@ seval (Lit x) =
     case x of
       S.Int n -> Exp $ SInt n
       -- S.Bool b -> Exp $ SBool b
-
--- seval (If e1 e2 e3) =
---     case e1' of
---         Exp (SBool True) -> seval e2
---         Exp (SBool False) -> seval e3
---         _ -> propagate e1' [(SConstructor "True" [] (TData "Bool"), [], \_ -> seval e2), (SConstructor "False" [] (TData "Bool"), [], \_ -> seval e3)]
---     where e1' = seval e1
-
-seval (PrimOp e1 op e2) =
-    case op of
-        -- arithmetic operations
-        S.Arith J.Add -> merge (SOp ADD, ADD) e1' e2'
-        S.Arith J.Mult -> merge (SOp MUL, MUL) e1' e2'
-        S.Arith J.Sub -> merge (SOp SUB, SUB) e1' e2'
-        S.Arith J.Div -> merge (SOp DIV, DIV) e1' e2'
-
-        -- comparison operations
-        S.Compare J.Equal -> merge (SOp EQ, EQ) e1' e2'
-        S.Compare J.NotEq -> merge (SOp NEQ, NEQ) e1' e2'
-        S.Compare J.LThan -> merge (SOp LT, LT) e1' e2'
-        S.Compare J.LThanE -> merge (SOp LE, LE) e1' e2'
-        S.Compare J.GThan -> merge (SOp GT, GT) e1' e2'
-        S.Compare J.GThanE -> merge (SOp GE, GE) e1' e2'
-
-        -- logic operations
-        S.Logic J.CAnd -> merge (SOp AND, AND) e1' e2'
-        S.Logic J.COr -> merge (SOp OR, OR) e1' e2'
-
-    where e1' = seval e1
-          e2' = seval e2
-
+seval (PrimOp e1 op e2) = merge (lift $ transOp op) [seval e1, seval e2]
 seval (Lam n t f) = Exp $ SFun n (seval . f) (transType t)
 seval (Let _ e f) = seval . f $ seval e
 seval (App e1 e2) = treeApply (seval e1) (seval e2)
@@ -185,7 +155,7 @@ seval (Constr c es) =
   case c of
    Constructor "True" _ -> Exp $ SBool True
    Constructor "False" _ -> Exp $ SBool False
-   _ -> mergeList (SConstr $ transConstructor c) (map seval es)
+   _ -> merge (SConstr $ transConstructor c) (map seval es)
 seval (Case e alts) = propagate (transType $ last ts) (seval e) (map (\(ConstrAlt c ns f) -> (transConstructor c, ns, seval . f)) alts)
   where ConstrAlt (Constructor _ ts) _ _ = head alts
 seval e = panic $ "seval: " ++ show e
@@ -210,68 +180,62 @@ transType (Datatype n _ _) = TData n
 transType (TVar n _) = TAny n
 transType t = panic $ "transType: " ++ show t
 
+transOp :: S.Operator -> Op
+transOp op =
+    case op of
+        -- arithmetic operations
+        S.Arith J.Add -> ADD
+        S.Arith J.Mult -> MUL
+        S.Arith J.Sub -> SUB
+        S.Arith J.Div -> DIV
+
+        -- comparison operations
+        S.Compare J.Equal -> EQ
+        S.Compare J.NotEq -> NEQ
+        S.Compare J.LThan -> LT
+        S.Compare J.LThanE -> LE
+        S.Compare J.GThan -> GT
+        S.Compare J.GThanE -> GE
+
+        -- logic operations
+        S.Logic J.CAnd -> AND
+        S.Logic J.COr -> OR
+
 jname2symtype :: String -> SymType
 jname2symtype "java.lang.Integer" = TInt
 -- jname2symtype "java.lang.Boolean" = TBool
 jname2symtype s = panic $ "str2stype: unsupported java type " ++ s
 
-mergeList :: ([SymValue] -> SymValue) -> [ExecutionTree] -> ExecutionTree
-mergeList f [] = Exp (f [])
-mergeList f (Exp e : xs) = mergeList (\es -> f (e:es)) xs
-mergeList f (Fork dt e ts : xs) = Fork dt e [(c, ns, \es -> mergeList f (g es : xs)) | (c,ns,g) <- ts]
-mergeList f (NewSymVar i typ tree : xs) = NewSymVar i typ (mergeList f (tree:xs))
+merge :: ([SymValue] -> SymValue) -> [ExecutionTree] -> ExecutionTree
+merge f [] = Exp (f [])
+merge f (Exp e : xs) = merge (\es -> f (e:es)) xs
+merge f (Fork dt e ts : xs) = Fork dt e [(c, ns, \es -> merge f (g es : xs)) | (c,ns,g) <- ts]
+merge f (NewSymVar i typ tree : xs) = NewSymVar i typ (merge f (tree:xs))
 
-merge :: (SymValue -> SymValue -> SymValue, Op)
-      -> ExecutionTree
-      -> ExecutionTree
-      -> ExecutionTree
-
-merge (_, ADD) (Exp (SInt a)) (Exp (SInt b)) = Exp $ SInt (a+b)
-merge (_, ADD) (Exp (SInt 0)) e = e
-merge (_, ADD) e (Exp (SInt 0)) = e
-
-merge (_, MUL) (Exp (SInt a)) (Exp (SInt b)) = Exp $ SInt (a*b)
-merge (_, MUL) zero@(Exp (SInt 0)) _ = zero
-merge (_, MUL) _ zero@(Exp (SInt 0)) = zero
-merge (_, MUL) (Exp (SInt 1)) e = e
-merge (_, MUL) e (Exp (SInt 1)) = e
-
-merge (_, SUB) (Exp (SInt a)) (Exp (SInt b)) = Exp $ SInt (a-b)
-merge (_, SUB) e (Exp (SInt 0)) = e
-
-merge (_, DIV) (Exp (SInt a)) (Exp (SInt b)) = Exp $ SInt (a `div` b)
-merge (_, DIV) zero@(Exp (SInt 0)) _ = zero
-merge (_, DIV) e (Exp (SInt 1)) = e
-
-merge (_, EQ) (Exp (SInt a)) (Exp (SInt b)) = Exp $ SBool (a==b)
-merge (_, EQ) (Exp (SBool a)) (Exp (SBool b)) = Exp $ SBool (a==b)
-
-merge (_, NEQ) (Exp (SInt a)) (Exp (SInt b)) = Exp $ SBool (a/=b)
-merge (_, NEQ) (Exp (SBool a)) (Exp (SBool b)) = Exp $ SBool (a/=b)
-
-merge (_, LT) (Exp (SInt a)) (Exp (SInt b)) = Exp $ SBool (a<b)
-merge (_, LE) (Exp (SInt a)) (Exp (SInt b)) = Exp $ SBool (a<=b)
-merge (_, GT) (Exp (SInt a)) (Exp (SInt b)) = Exp $ SBool (a>b)
-merge (_, GE) (Exp (SInt a)) (Exp (SInt b)) = Exp $ SBool (a>=b)
-
-merge (_, OR) (Exp (SBool a)) (Exp (SBool b)) = Exp $ SBool (a||b)
-merge (_, OR) true@(Exp (SBool True)) _ = true
-merge (_, OR) _ true@(Exp (SBool True)) = true
-merge (_, OR) e (Exp (SBool False)) = e
-merge (_, OR) (Exp (SBool False)) e = e
-
-merge (_, AND) (Exp (SBool a)) (Exp (SBool b)) = Exp $ SBool (a&&b)
-merge (_, AND) false@(Exp (SBool False)) _ = false
-merge (_, AND) _ false@(Exp (SBool False)) = false
-merge (_, AND) (Exp (SBool True)) e = e
-merge (_, AND) e (Exp (SBool True)) = e
-
-merge (f, _) (Exp e1) (Exp e2) = Exp (f e1 e2)
-merge f (Fork dt e ts) t = Fork dt e [(c, ns, \es -> merge f (g es) t) | (c,ns,g) <- ts]
-merge f t (Fork dt e ts) = Fork dt e [(c, ns, merge f t . g) | (c,ns,g) <- ts]
-merge f (NewSymVar i t t1) t2 = NewSymVar i t (merge f t1 t2)
-merge f t1 (NewSymVar i typ t2) = NewSymVar i typ (merge f t1 t2)
-
+lift :: Op -> [SymValue] -> SymValue
+lift op vs =
+    case (v1, v2) of
+     (SInt i1, SInt i2) ->
+       case op of
+        ADD -> SInt (i1 + i2)
+        MUL -> SInt (i1 * i2)
+        DIV -> SInt (i1 `div` i2)
+        SUB -> SInt (i1 - i2)
+        EQ  -> SBool (i1 == i2)
+        NEQ -> SBool (i1 /= i2)
+        GT  -> SBool (i1 > i2)
+        LT  -> SBool (i1 < i2)
+        GE  -> SBool (i1 >= i2)
+        LE  -> SBool (i1 <= i2)
+     (SBool b1, SBool b2) ->
+       case op of
+        EQ  -> SBool (b1 == b2)
+        NEQ -> SBool (b1 /= b2)
+        AND -> SBool (b1 && b2)
+        OR  -> SBool (b1 || b2)
+     _ -> SOp op v1 v2
+    where v1 = vs !! 0
+          v2 = vs !! 1
 
 treeApply :: ExecutionTree -> ExecutionTree -> ExecutionTree
 treeApply (Exp e) t =
