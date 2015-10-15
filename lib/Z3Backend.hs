@@ -144,7 +144,7 @@ defaultTarget _ cond e = liftIO $ putDoc $ cond <+> evalTo <+> pretty e <> lineb
 
 counterTarget :: Integer -> Int -> Doc -> SymValue -> Z3 ()
 counterTarget startTime i cond (SBool False) =
-    do liftIO $ getCPUTime >>= (\time -> putDoc $ (text . show $ (time - startTime) `div` (10^9)) <> text "ms" <> linebreak)
+    do liftIO $ getCPUTime >>= (\time -> putDoc $ (text . show $ fromIntegral (time - startTime) / (10^9)) <> text "ms" <> linebreak)
        liftIO $ putDoc $ cond <+> evalTo <+> text "False" <> linebreak
        withModel ((>>= (liftIO . putStrLn . counterExample i)) . showModel)
        return ()
